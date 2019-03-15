@@ -23,6 +23,9 @@ jobs:
         root: .
         paths:
         - .build
+    - store_artifacts:
+      path: .build
+      destination: /build
 
   release_tags:
     docker:
