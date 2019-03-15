@@ -1,6 +1,8 @@
 # Kamailio Exporter for Prometheus
 
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/florentchauveau/kamailio_exporter/blob/master/LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/pascomnet/kamailio_exporter/blob/master/LICENSE)
+[![CircleCI](https://circleci.com/gh/pascomnet/kamailio_exporter.svg?style=shield)](https://circleci.com/gh/pascomnet/kamailio_exporter)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pascomnet/kamailio_exporter)](https://goreportcard.com/report/github.com/pascomnet/kamailio_exporter)
 
 A [Kamailio](https://www.kamailio.org/) exporter for Prometheus.
 It exports a range of core and often used module statistics as well as scripted metrics. 
