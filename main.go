@@ -10,9 +10,13 @@ import (
 	"os"
 )
 
+var Version string
+
 func main() {
 	app := cli.NewApp()
 	app.Name = "Kamailio exporter"
+	app.Usage = "Expose Kamailio statistics as http endpoint for prometheus."
+	app.Version = Version
 	// define cli flags
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{
