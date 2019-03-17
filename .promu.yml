@@ -8,11 +8,11 @@ build:
     flags: -a -tags netgo
     ldflags: |
         -s
-        -X {{repoPath}}/version.Version={{.Version}}
-        -X {{repoPath}}/version.Revision={{.Revision}}
-        -X {{repoPath}}/version.Branch={{.Branch}}
-        -X {{repoPath}}/version.BuildUser={{user}}@{{host}}
-        -X {{repoPath}}/version.BuildDate={{date "20060102-15:04:05"}}
+        -X main.Version={{.Version}}
+        -X main.Revision={{.Revision}}
+        -X main.Branch={{.Branch}}
+        -X main.BuildUser={{user}}@{{host}}
+        -X main.BuildDate={{date "20060102-15:04:05"}}
 tarball:
     prefix: .
     files:
