@@ -82,11 +82,15 @@ func appAction(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// clear default collectors
+	registry := prometheus.NewRegistry()
+	prometheus.DefaultRegisterer = registry
+	prometheus.DefaultGatherer = registry
+
 	// and register it in prometheus API
 	prometheus.MustRegister(collector)
 
-	metricsPath := c.String("metricsPath")
-	listenAddress := fmt.Sprintf("%s:%d", c.String("bindIp"), c.Int("bindPort"))
 	// wire "/" to return some helpful info
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
@@ -98,10 +102,13 @@ func appAction(c *cli.Context) error {
              </body>
              </html>`))
 	})
+
 	// wire "/metrics" -> prometheus API collectors
-	http.HandleFunc(metricsPath, promhttp.Handler().ServeHTTP)
+	httpHandler := promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{})
+	http.HandleFunc(c.String("metricsPath"), httpHandler.ServeHTTP)
 
 	// start http server
+	listenAddress := fmt.Sprintf("%s:%d", c.String("bindIp"), c.Int("bindPort"))
 	log.Info("Listening on ", listenAddress, metricsPath)
 	return http.ListenAndServe(listenAddress, nil)
 }
