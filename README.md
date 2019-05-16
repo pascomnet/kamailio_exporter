@@ -7,6 +7,11 @@
 A [Kamailio](https://www.kamailio.org/) exporter for Prometheus.
 It exports a range of core and often used module statistics as well as scripted metrics. 
 
+This project was presented at [Kamailioworld 2019](https://www.kamailioworld.com/k07/)
+
+[![IMAGE ALT TEXT](http://img.youtube.com/vi/wQ393kz5G_k/0.jpg)](http://www.youtube.com/watch?v=wQ393kz5G_k "Measuring Kamailio")
+
+
 ## Kamailio configuration
 
 The Exporter needs a [BINRPC](http://kamailio.org/docs/modules/stable/modules/ctl.html) connection to Kamailio.
