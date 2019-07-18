@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"strconv"
+	"strings"
+
 	"github.com/florentchauveau/go-kamailio-binrpc/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
-	"net"
-	"strconv"
-	"strings"
 )
 
 // declare a series of prometheus metric descriptions
@@ -102,6 +103,11 @@ var (
 	tmx_rpl_total = prometheus.NewDesc(
 		"kamailio_tmx_rpl_total",
 		"Tmx reply counters",
+		[]string{"type"}, nil)
+
+	dialog = prometheus.NewDesc(
+		"kamailio_dialog",
+		"Ongoing Dialogs",
 		[]string{"type"}, nil)
 )
 
@@ -323,6 +329,12 @@ func produceMetrics(completeStatMap map[string]string, metricChannel chan<- prom
 	convertStatToMetric(completeStatMap, "tmx.rpl_relayed", "relayed", tmx_rpl_total, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "tmx.rpl_sent", "sent", tmx_rpl_total, metricChannel, prometheus.CounterValue)
 
+	// kamailio_dialog
+	convertStatToMetric(completeStatMap, "dialog.active_dialogs", "active_dialogs", dialog, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "dialog.early_dialogs", "early_dialogs", dialog, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "dialog.expired_dialogs", "expired_dialogs", dialog, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "dialog.failed_dialogs", "failed_dialogs", dialog, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "dialog.processed_dialogs", "processed_dialogs", dialog, metricChannel, prometheus.CounterValue)
 }
 
 // Iterate all reported "stats" keys and find those with a prefix of "script."
