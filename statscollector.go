@@ -182,9 +182,37 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	defer conn.Close()
 	// TODO
 	// c.conn.SetDeadline(time.Now().Add(c.Timeout))
+	//Find out the version of Kamailio running
+	// WritePacket returns the cookie generated
+	versionCookie, err := binrpc.WritePacket(conn, "core.version")
+	if err != nil {
+		return nil, err
+	}
+
+	// the versionCookie is passed again for verification
+	// we receive records in response
+	versionResp, err := binrpc.ReadPacket(conn, versionCookie)
+	if err != nil {
+		return nil, err
+	}
+	// convert the structure into a simple key=>value map
+	var valueAsString string
+	var ok,oldVersion bool
+	if valueAsString, ok = versionResp[0].Value.(string); ok {
+		log.Debugf("[Kamailio CTL Version:%#v",valueAsString)
+	}
+	var statsCommand string
+	if strings.Contains(valueAsString,"5.0") {
+		//Older version of Kamailio detected
+		statsCommand = "stats.get_statistics"
+		oldVersion = true
+	}else{
+		statsCommand = "stats.fetch"
+		oldVersion = false
+	}
 
 	// WritePacket returns the cookie generated
-	cookie, err := binrpc.WritePacket(conn, "stats.fetch", "all")
+	cookie, err := binrpc.WritePacket(conn, statsCommand, "all")
 	if err != nil {
 		return nil, err
 	}
@@ -197,12 +225,32 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	}
 
 	// convert the structure into a simple key=>value map
-	items, _ := records[0].StructItems()
 	result := make(map[string]string)
-	for _, item := range items {
-		value, _ := item.Value.String()
-		result[item.Key] = value
+
+	if oldVersion {	
+		for _, item := range records {
+			if valueAsString, ok = item.Value.(string); ok {
+				//split into Key and Value
+				Pair := strings.Split(valueAsString, "=")
+				//convert key's : into a . 
+				key := strings.ReplaceAll(Pair[0], ":", ".")
+				//remove spaces
+				key = strings.TrimSpace(key)
+				value := strings.TrimSpace(Pair[1])
+				//Push into Map as expected by other functions
+				result[key] = value
+			}		
+		}
+	}else{
+		items, _ := records[0].StructItems()
+		for _, item := range items {
+			value, _ := item.Value.String()
+			log.Debugf("Processing key:%s for Value:%s",item.Key,value)
+			result[item.Key] = value
+		}
 	}
+	
+	
 
 	return result, nil
 }
