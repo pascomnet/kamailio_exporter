@@ -109,6 +109,11 @@ var (
 		"kamailio_dialog",
 		"Ongoing Dialogs",
 		[]string{"type"}, nil)
+	usrloc = prometheus.NewDesc(
+		"kamailio_usrloc",
+		"Userlocation Stats",
+		[]string{"type"}, nil)
+
 )
 
 // the actual Collector object
@@ -383,6 +388,25 @@ func produceMetrics(completeStatMap map[string]string, metricChannel chan<- prom
 	convertStatToMetric(completeStatMap, "dialog.expired_dialogs", "expired_dialogs", dialog, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "dialog.failed_dialogs", "failed_dialogs", dialog, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "dialog.processed_dialogs", "processed_dialogs", dialog, metricChannel, prometheus.CounterValue)
+	/*
+	  	usrloc.location-contacts: 4465
+        	usrloc.location-expires: 1018
+        	usrloc.location-users: 3172
+        	usrloc.registered_users: 3172
+
+	*/
+	//kamailio_usrloc
+	convertStatToMetric(completeStatMap, "usrloc.location-contacts", "location_contact", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location-expires", "location_expires", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location-users", "location_users", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.registered_users", "registered_users", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "dialog.processed_dialogs", "processed_dialogs", usrloc, metricChannel, prometheus.CounterValue)
+
+	//kamailio_registrar
+	convertStatToMetric(completeStatMap, "registrar.accepted_regs", "accepted_regs", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "registrar.rejected_regs", "rejected_regs", usrloc, metricChannel, prometheus.CounterValue)
+
+
 }
 
 // Iterate all reported "stats" keys and find those with a prefix of "script."

@@ -1,5 +1,7 @@
 module github.com/pascomnet/kamailio_exporter
 
+go 1.14
+
 require (
 	github.com/beorn7/perks v0.0.0-20180321164747-3a771d992973
 	github.com/florentchauveau/go-kamailio-binrpc/v2 v2.0.1
