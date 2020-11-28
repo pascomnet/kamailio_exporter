@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"os"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
-	"net/http"
-	"os"
 )
 
 var Version string
@@ -82,6 +83,9 @@ func appAction(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	//Connect with the Kamailio server  now
+	collector.ConnectKamailio()
+	defer conn.Close()
 	// and register it in prometheus API
 	prometheus.MustRegister(collector)
 

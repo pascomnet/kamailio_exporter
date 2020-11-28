@@ -6,11 +6,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/florentchauveau/go-kamailio-binrpc/v2"
+	binrpc "github.com/florentchauveau/go-kamailio-binrpc/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
 )
+
+var conn net.Conn
 
 // declare a series of prometheus metric descriptions
 // we can reuse them for each scrape
@@ -113,8 +115,10 @@ var (
 		"kamailio_usrloc",
 		"Userlocation Stats",
 		[]string{"type"}, nil)
-
 )
+
+//MarkAsCollected - Insert Kamailio stat name in here once we're done scrapping its value
+var MarkAsCollected = make(map[string]string)
 
 // the actual Collector object
 type StatsCollector struct {
@@ -147,14 +151,45 @@ func (c *StatsCollector) Describe(descriptionChannel chan<- *prometheus.Desc) {
 	prometheus.DescribeByCollect(c, descriptionChannel)
 }
 
+func (c *StatsCollector) ConnectKamailio() {
+	// establish connection to Kamailio server
+	var err error
+	var readInterface string
+
+	if c.kamailioHost == "" {
+
+		readInterface = c.socketPath
+		conn, err = net.Dial("unix", c.socketPath)
+
+	} else {
+		// TODO
+		// c.conn.SetDeadline(time.Now().Add(c.Timeout))
+		address := fmt.Sprintf("%s:%d", c.kamailioHost, c.kamailioPort)
+		readInterface = address
+
+		conn, err = net.Dial("tcp", address)
+
+	}
+	if err != nil {
+		log.Printf("Unable to connect with the Provided Interface:%s\n", readInterface)
+	}
+
+}
+
 // part of the prometheus.Collector interface
 func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
+	// TODO measure rpc time
+	//timer := prometheus.NewTimer(rpc_request_duration)
+	//defer timer.ObserveDuration()
+
 	// read all stats from Kamailio
 	if completeStatMap, err := c.fetchStats(); err == nil {
 		// and produce various prometheus.Metric for well-known stats
 		produceMetrics(completeStatMap, metricChannel)
 		// produce prometheus.Metric objects for scripted stats (if any)
 		convertScriptedMetrics(completeStatMap, metricChannel)
+		// produce prometheus.Metric objects for anything thats still left behind by above - best effort mode
+		convertOtherMetrics(completeStatMap, metricChannel)
 	} else {
 		// something went wrong
 		// TODO: add a error metric
@@ -165,35 +200,16 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 // connect to Kamailio and perform a "stats.fetch" rpc call
 // result is a flat key=>value map
 func (c *StatsCollector) fetchStats() (map[string]string, error) {
-
 	// TODO measure rpc time
 	//timer := prometheus.NewTimer(rpc_request_duration)
 	//defer timer.ObserveDuration()
-
-	// establish connection to Kamailio server
-	var err error
-	var conn net.Conn
-	if c.kamailioHost == "" {
-		log.Debug("Requesting stats from kamailio via domain socket ", c.socketPath)
-		conn, err = net.Dial("unix", c.socketPath)
-	} else {
-		address := fmt.Sprintf("%s:%d", c.kamailioHost, c.kamailioPort)
-		log.Debug("Requesting stats from kamailio via binrpc ", address)
-		conn, err = net.Dial("tcp", address)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	// TODO
-	// c.conn.SetDeadline(time.Now().Add(c.Timeout))
 	//Find out the version of Kamailio running
 	// WritePacket returns the cookie generated
+
 	versionCookie, err := binrpc.WritePacket(conn, "core.version")
 	if err != nil {
 		return nil, err
 	}
-
 	// the versionCookie is passed again for verification
 	// we receive records in response
 	versionResp, err := binrpc.ReadPacket(conn, versionCookie)
@@ -202,16 +218,16 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	}
 	// convert the structure into a simple key=>value map
 	var valueAsString string
-	var ok,oldVersion bool
+	var ok, oldVersion bool
 	if valueAsString, ok = versionResp[0].Value.(string); ok {
-		log.Debugf("[Kamailio CTL Version:%#v",valueAsString)
+		log.Debugf("[Kamailio CTL Version:%#v", valueAsString)
 	}
 	var statsCommand string
-	if strings.Contains(valueAsString,"5.0") {
+	if strings.Contains(valueAsString, "5.0") {
 		//Older version of Kamailio detected
 		statsCommand = "stats.get_statistics"
 		oldVersion = true
-	}else{
+	} else {
 		statsCommand = "stats.fetch"
 		oldVersion = false
 	}
@@ -232,30 +248,27 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	// convert the structure into a simple key=>value map
 	result := make(map[string]string)
 
-	if oldVersion {	
+	if oldVersion {
 		for _, item := range records {
 			if valueAsString, ok = item.Value.(string); ok {
 				//split into Key and Value
 				Pair := strings.Split(valueAsString, "=")
-				//convert key's : into a . 
+				//convert key's : into a .
 				key := strings.ReplaceAll(Pair[0], ":", ".")
 				//remove spaces
 				key = strings.TrimSpace(key)
 				value := strings.TrimSpace(Pair[1])
 				//Push into Map as expected by other functions
 				result[key] = value
-			}		
+			}
 		}
-	}else{
+	} else {
 		items, _ := records[0].StructItems()
 		for _, item := range items {
 			value, _ := item.Value.String()
-			log.Debugf("Processing key:%s for Value:%s",item.Key,value)
 			result[item.Key] = value
 		}
 	}
-	
-	
 
 	return result, nil
 }
@@ -388,24 +401,16 @@ func produceMetrics(completeStatMap map[string]string, metricChannel chan<- prom
 	convertStatToMetric(completeStatMap, "dialog.expired_dialogs", "expired_dialogs", dialog, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "dialog.failed_dialogs", "failed_dialogs", dialog, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "dialog.processed_dialogs", "processed_dialogs", dialog, metricChannel, prometheus.CounterValue)
-	/*
-	  	usrloc.location-contacts: 4465
-        	usrloc.location-expires: 1018
-        	usrloc.location-users: 3172
-        	usrloc.registered_users: 3172
 
-	*/
 	//kamailio_usrloc
-	convertStatToMetric(completeStatMap, "usrloc.location-contacts", "location_contact", usrloc, metricChannel, prometheus.CounterValue)
-	convertStatToMetric(completeStatMap, "usrloc.location-expires", "location_expires", usrloc, metricChannel, prometheus.CounterValue)
-	convertStatToMetric(completeStatMap, "usrloc.location-users", "location_users", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location_contacts", "location_contact", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location_expires", "location_expires", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location_users", "location_users", usrloc, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "usrloc.registered_users", "registered_users", usrloc, metricChannel, prometheus.CounterValue)
-	convertStatToMetric(completeStatMap, "dialog.processed_dialogs", "processed_dialogs", usrloc, metricChannel, prometheus.CounterValue)
 
 	//kamailio_registrar
 	convertStatToMetric(completeStatMap, "registrar.accepted_regs", "accepted_regs", usrloc, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "registrar.rejected_regs", "rejected_regs", usrloc, metricChannel, prometheus.CounterValue)
-
 
 }
 
@@ -416,6 +421,7 @@ func convertScriptedMetrics(data map[string]string, prom chan<- prometheus.Metri
 	for k := range data {
 		// k = "script.custom_total"
 		if strings.HasPrefix(k, "script.") {
+			MarkAsCollected[k] = "marked"
 			// metricName = "custom_total"
 			metricName := strings.TrimPrefix(k, "script.")
 			metricName = strings.ToLower(metricName)
@@ -434,6 +440,49 @@ func convertScriptedMetrics(data map[string]string, prom chan<- prometheus.Metri
 	}
 }
 
+// Iterate all reported "stats" keys and find those with a prefix of "script."
+// These values are user-defined and populated within the kamailio script.
+// See https://www.kamailio.org/docs/modules/5.2.x/modules/statistics.html
+func convertOtherMetrics(data map[string]string, prom chan<- prometheus.Metric) {
+
+	for k := range data {
+		if _, ok := MarkAsCollected[k]; !ok {
+			//this is a new stat, nothing we've collected so far.
+
+			var description *prometheus.Desc
+			splitMetricName := strings.Split(k, ".")
+
+			metricName := "kamailio_" + strings.ToLower(splitMetricName[0])
+
+			var valueType prometheus.ValueType
+			// default type of value is to be Counter
+			valueType = prometheus.GaugeValue
+
+			// create a metric description on the fly
+			var label string
+			var subSections []string
+			cutCount := strings.Count(splitMetricName[1], "_")
+			subSections = strings.SplitN(splitMetricName[1], "_", cutCount)
+			if cutCount > 1 {
+				subSections = strings.SplitN(splitMetricName[1], "_", cutCount)
+				metricName = metricName + "_" + strings.Join(subSections[:len(subSections)-1], "_")
+				label = subSections[len(subSections)-1]
+			} else {
+				subSections = strings.SplitN(splitMetricName[1], "_", cutCount+1)
+				metricName = metricName + "_" + subSections[0]
+				label = subSections[1]
+			}
+			description = prometheus.NewDesc(metricName, "Other metric "+metricName, []string{"type"}, nil)
+			// and produce a metricA
+			convertStatToMetric(data, k, label, description, prom, valueType)
+		}
+	}
+	//Flush out marked stats so we can collect at next collection
+	for k := range MarkAsCollected {
+		delete(MarkAsCollected, k)
+	}
+}
+
 // convert a single "stat" value to a prometheus metric
 // invalid "stat" paires are skipped but logged
 func convertStatToMetric(completeStatMap map[string]string, statKey string, optionalLabelValue string, metricDescription *prometheus.Desc, metricChannel chan<- prometheus.Metric, valueType prometheus.ValueType) {
@@ -445,8 +494,15 @@ func convertStatToMetric(completeStatMap map[string]string, statKey string, opti
 		labelValues = []string{}
 	}
 	// get the stat-value ...
+
 	if valueAsString, ok := completeStatMap[statKey]; ok {
 		// ... convert it to a float
+		if optionalLabelValue != "" {
+			MarkAsCollected[statKey] = optionalLabelValue
+		} else {
+			MarkAsCollected[statKey] = "marked"
+		}
+
 		if value, err := strconv.ParseFloat(valueAsString, 64); err == nil {
 			// and produce a prometheus metric
 			metric, err := prometheus.NewConstMetric(
@@ -460,7 +516,7 @@ func convertStatToMetric(completeStatMap map[string]string, statKey string, opti
 				metricChannel <- metric
 			} else {
 				// or skip and complain
-				log.Warnf("Could not convert stat value [%s]: %s", statKey, err)
+				log.Warnf("Could not convert stat Key [%s] Value:%s Err: %s", statKey, valueAsString, err)
 			}
 		}
 	} else {
