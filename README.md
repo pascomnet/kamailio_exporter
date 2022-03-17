@@ -188,7 +188,22 @@ kamailio_tmx_rpl_total{type="sent"} 0
 kamailio_tmx_type_total{type="uac"} 0
 kamailio_tmx_type_total{type="uas"} 0
 ```
+## Pkg / Private memory metrics
 
+A series of metrics is exported for each Kamailio child process:
+
+```
+# HELP kamilio_pkgmem_frags Private memory total frags
+kamilio_pkgmem_frags{entry="0"} 5
+# HELP kamilio_pkgmem_free Private memory free
+kamilio_pkgmem_free{entry="0"} 529136
+# HELP kamilio_pkgmem_real Private memory real used
+kamilio_pkgmem_real{entry="0"} 890336
+# HELP kamilio_pkgmem_size Private memory total size
+kamilio_pkgmem_size{entry="0"} 8.388608e+06
+# HELP kamilio_pkgmem_used Private memory used
+kamilio_pkgmem_used{entry="0"} 529136
+```
 
 ## Scripted metrics
 
