@@ -1,3 +1,24 @@
+// MIT License
+
+// Copyright (c) 2021 Thomas Weber, pascom GmbH & Co. Kg
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 package main
 
 import (
@@ -6,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/florentchauveau/go-kamailio-binrpc/v2"
+	binrpc "github.com/florentchauveau/go-kamailio-binrpc/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
@@ -109,7 +130,45 @@ var (
 		"kamailio_dialog",
 		"Ongoing Dialogs",
 		[]string{"type"}, nil)
+
+	pkgmem_used = prometheus.NewDesc(
+		"kamilio_pkgmem_used",
+		"Private memory used",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_free = prometheus.NewDesc(
+		"kamilio_pkgmem_free",
+		"Private memory free",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_real = prometheus.NewDesc(
+		"kamilio_pkgmem_real",
+		"Private memory real used",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_size = prometheus.NewDesc(
+		"kamilio_pkgmem_size",
+		"Private memory total size",
+		[]string{"entry"},
+		nil)
+	pkgmem_frags = prometheus.NewDesc(
+		"kamilio_pkgmem_frags",
+		"Private memory total frags",
+		[]string{"entry"},
+		nil)
 )
+
+type PkgStatsEntry struct {
+	entry       int
+	used        int
+	free        int
+	real_used   int
+	total_size  int
+	total_frags int
+}
 
 // the actual Collector object
 type StatsCollector struct {
@@ -144,22 +203,6 @@ func (c *StatsCollector) Describe(descriptionChannel chan<- *prometheus.Desc) {
 
 // part of the prometheus.Collector interface
 func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
-	// read all stats from Kamailio
-	if completeStatMap, err := c.fetchStats(); err == nil {
-		// and produce various prometheus.Metric for well-known stats
-		produceMetrics(completeStatMap, metricChannel)
-		// produce prometheus.Metric objects for scripted stats (if any)
-		convertScriptedMetrics(completeStatMap, metricChannel)
-	} else {
-		// something went wrong
-		// TODO: add a error metric
-		log.Error("Could not fetch values from kamailio", err)
-	}
-}
-
-// connect to Kamailio and perform a "stats.fetch" rpc call
-// result is a flat key=>value map
-func (c *StatsCollector) fetchStats() (map[string]string, error) {
 
 	// TODO measure rpc time
 	//timer := prometheus.NewTimer(rpc_request_duration)
@@ -177,8 +220,10 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 		conn, err = net.Dial("tcp", address)
 	}
 	if err != nil {
-		return nil, err
+		log.Error("Can not connect to kamailio: ", err)
+		return
 	}
+
 	defer conn.Close()
 	// TODO
 	// c.conn.SetDeadline(time.Now().Add(c.Timeout))
@@ -186,25 +231,70 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	// WritePacket returns the cookie generated
 	cookie, err := binrpc.WritePacket(conn, "stats.fetch", "all")
 	if err != nil {
-		return nil, err
+		log.Error("Can not request stats: ", err)
+		return
 	}
 
 	// the cookie is passed again for verification
 	// we receive records in response
 	records, err := binrpc.ReadPacket(conn, cookie)
 	if err != nil {
-		return nil, err
+		log.Error("Can not fetch stats: ", err)
+		return
 	}
 
 	// convert the structure into a simple key=>value map
 	items, _ := records[0].StructItems()
-	result := make(map[string]string)
+	completeStatMap := make(map[string]string)
 	for _, item := range items {
 		value, _ := item.Value.String()
-		result[item.Key] = value
+		completeStatMap[item.Key] = value
+	}
+	// and produce various prometheus.Metric for well-known stats
+	produceMetrics(completeStatMap, metricChannel)
+	// produce prometheus.Metric objects for scripted stats (if any)
+	convertScriptedMetrics(completeStatMap, metricChannel)
+
+	// now fetch pkg stats
+	cookie, err = binrpc.WritePacket(conn, "pkg.stats")
+	if err != nil {
+		log.Error("Can not request pkg.stats: ", err)
+		return
 	}
 
-	return result, nil
+	records, err = binrpc.ReadPacket(conn, cookie)
+	if err != nil {
+		log.Error("Can not fetch pkg.stats: ", err)
+		return
+	}
+
+	// convert each pkg entry to a series of metrics
+	for _, record := range records {
+		items, _ = record.StructItems()
+		entry := PkgStatsEntry{}
+		for _, item := range items {
+			switch item.Key {
+			case "entry":
+				entry.entry, _ = item.Value.Int()
+			case "used":
+				entry.used, _ = item.Value.Int()
+			case "free":
+				entry.free, _ = item.Value.Int()
+			case "real_used":
+				entry.real_used, _ = item.Value.Int()
+			case "total_size":
+				entry.total_size, _ = item.Value.Int()
+			case "total_frags":
+				entry.total_frags, _ = item.Value.Int()
+			}
+		}
+		sentry := strconv.Itoa(entry.entry)
+		metricChannel <- prometheus.MustNewConstMetric(pkgmem_used, prometheus.GaugeValue, float64(entry.used), sentry)
+		metricChannel <- prometheus.MustNewConstMetric(pkgmem_free, prometheus.GaugeValue, float64(entry.used), sentry)
+		metricChannel <- prometheus.MustNewConstMetric(pkgmem_real, prometheus.GaugeValue, float64(entry.real_used), sentry)
+		metricChannel <- prometheus.MustNewConstMetric(pkgmem_size, prometheus.GaugeValue, float64(entry.total_size), sentry)
+		metricChannel <- prometheus.MustNewConstMetric(pkgmem_frags, prometheus.GaugeValue, float64(entry.total_frags), sentry)
+	}
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
