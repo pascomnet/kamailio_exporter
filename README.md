@@ -204,6 +204,20 @@ kamilio_pkgmem_size{entry="0"} 8.388608e+06
 # HELP kamilio_pkgmem_used Private memory used
 kamilio_pkgmem_used{entry="0"} 529136
 ```
+## TCP/TLS details
+
+Some additional values from `core.tcp_info`:
+
+```
+# HELP kamailio_tcp_max_connections TCP connection limit
+kamailio_tcp_max_connections 16384
+# HELP kamailio_tcp_readers TCP readers
+kamailio_tcp_readers 8
+# HELP kamailio_tls_connections Opened TLS connections
+kamailio_tls_connections 0
+# HELP kamailio_tls_max_connections TLS connection limit
+kamailio_tls_max_connections 16384
+```
 
 ## Scripted metrics
 
