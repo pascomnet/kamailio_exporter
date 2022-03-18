@@ -132,32 +132,57 @@ var (
 		[]string{"type"}, nil)
 
 	pkgmem_used = prometheus.NewDesc(
-		"kamilio_pkgmem_used",
+		"kamailio_pkgmem_used",
 		"Private memory used",
 		[]string{"entry"},
 		nil)
 
 	pkgmem_free = prometheus.NewDesc(
-		"kamilio_pkgmem_free",
+		"kamailio_pkgmem_free",
 		"Private memory free",
 		[]string{"entry"},
 		nil)
 
 	pkgmem_real = prometheus.NewDesc(
-		"kamilio_pkgmem_real",
+		"kamailio_pkgmem_real",
 		"Private memory real used",
 		[]string{"entry"},
 		nil)
 
 	pkgmem_size = prometheus.NewDesc(
-		"kamilio_pkgmem_size",
+		"kamailio_pkgmem_size",
 		"Private memory total size",
 		[]string{"entry"},
 		nil)
+
 	pkgmem_frags = prometheus.NewDesc(
-		"kamilio_pkgmem_frags",
+		"kamailio_pkgmem_frags",
 		"Private memory total frags",
 		[]string{"entry"},
+		nil)
+
+	tcp_readers = prometheus.NewDesc(
+		"kamailio_tcp_readers",
+		"TCP readers",
+		[]string{},
+		nil)
+
+	tcp_max_connections = prometheus.NewDesc(
+		"kamailio_tcp_max_connections",
+		"TCP connection limit",
+		[]string{},
+		nil)
+
+	tls_max_connections = prometheus.NewDesc(
+		"kamailio_tls_max_connections",
+		"TLS connection limit",
+		[]string{},
+		nil)
+
+	tls_connections = prometheus.NewDesc(
+		"kamailio_tls_connections",
+		"Opened TLS connections",
+		[]string{},
 		nil)
 )
 
@@ -295,6 +320,38 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 		metricChannel <- prometheus.MustNewConstMetric(pkgmem_size, prometheus.GaugeValue, float64(entry.total_size), sentry)
 		metricChannel <- prometheus.MustNewConstMetric(pkgmem_frags, prometheus.GaugeValue, float64(entry.total_frags), sentry)
 	}
+
+	// fetch tcp details
+	cookie, err = binrpc.WritePacket(conn, "core.tcp_info")
+	if err != nil {
+		log.Error("Can not request core.tcp_info: ", err)
+		return
+	}
+
+	records, err = binrpc.ReadPacket(conn, cookie)
+	if err != nil || len(records) == 0 {
+		log.Error("Can not fetch core.tcp_info: ", err)
+		return
+	}
+	items, _ = records[0].StructItems()
+	var v int
+	for _, item := range items {
+		switch item.Key {
+		case "readers":
+			v, _ = item.Value.Int()
+			metricChannel <- prometheus.MustNewConstMetric(tcp_readers, prometheus.GaugeValue, float64(v))
+		case "max_connections":
+			v, _ = item.Value.Int()
+			metricChannel <- prometheus.MustNewConstMetric(tcp_max_connections, prometheus.GaugeValue, float64(v))
+		case "max_tls_connections":
+			v, _ = item.Value.Int()
+			metricChannel <- prometheus.MustNewConstMetric(tls_max_connections, prometheus.GaugeValue, float64(v))
+		case "opened_tls_connections":
+			v, _ = item.Value.Int()
+			metricChannel <- prometheus.MustNewConstMetric(tls_connections, prometheus.GaugeValue, float64(v))
+		}
+	}
+
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
