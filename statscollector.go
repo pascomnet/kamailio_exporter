@@ -315,7 +315,7 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 		}
 		sentry := strconv.Itoa(entry.entry)
 		metricChannel <- prometheus.MustNewConstMetric(pkgmem_used, prometheus.GaugeValue, float64(entry.used), sentry)
-		metricChannel <- prometheus.MustNewConstMetric(pkgmem_free, prometheus.GaugeValue, float64(entry.used), sentry)
+		metricChannel <- prometheus.MustNewConstMetric(pkgmem_free, prometheus.GaugeValue, float64(entry.free), sentry)
 		metricChannel <- prometheus.MustNewConstMetric(pkgmem_real, prometheus.GaugeValue, float64(entry.real_used), sentry)
 		metricChannel <- prometheus.MustNewConstMetric(pkgmem_size, prometheus.GaugeValue, float64(entry.total_size), sentry)
 		metricChannel <- prometheus.MustNewConstMetric(pkgmem_frags, prometheus.GaugeValue, float64(entry.total_frags), sentry)
