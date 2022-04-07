@@ -184,6 +184,12 @@ var (
 		"Opened TLS connections",
 		[]string{},
 		nil)
+
+	rtpengine_disabled = prometheus.NewDesc(
+		"kamailio_rtpengine_disabled",
+		"rtpengine connection status",
+		[]string{"url"},
+		nil)
 )
 
 type PkgStatsEntry struct {
@@ -352,6 +358,33 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 		}
 	}
 
+	// fetch rtpengine disabled status and url
+	cookie, err = binrpc.WritePacket(conn, "rtpengine.show", "all")
+	if err != nil {
+		log.Error("Can not request rtpengine.show: ", err)
+		return
+	}
+
+	records, err = binrpc.ReadPacket(conn, cookie)
+	if err != nil || len(records) == 0 {
+		log.Error("Can not fetch rtpengine.show: ", err)
+		return
+	}
+
+	for _, record := range records {
+		items, _ = record.StructItems()
+		var s string
+		for _, item := range items {
+			log.Info("key:", item.Key)
+			switch item.Key {
+			case "disabled":
+				v, _ = item.Value.Int()
+			case "url":
+				s, _ = item.Value.String()
+			}
+		}
+		metricChannel <- prometheus.MustNewConstMetric(rtpengine_disabled, prometheus.GaugeValue, float64(v), s)
+	}
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
