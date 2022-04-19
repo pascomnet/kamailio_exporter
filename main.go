@@ -83,7 +83,7 @@ func main() {
 			EnvVar: "METRICS_PATH",
 		}, cli.StringFlag{
 			Name:   "rtpmetricsPath",
-			Value:  "/rtpmetrics",
+			Value:  "",
 			Usage:  "The http scrape path for rtpengine metrics",
 			EnvVar: "RTPMETRICS_PATH",
 		},
