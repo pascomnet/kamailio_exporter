@@ -225,7 +225,11 @@ kamailio_tls_connections 0
 # HELP kamailio_tls_max_connections TLS connection limit
 kamailio_tls_max_connections 16384
 ```
-
+## RTPEngine connection state
+```
+# HELP kamailio_rtpengine_enabled rtpengine connection status-
+kamailio_rtpengine_enabled{index="0",set="0",url="udp:127.0.0.1:22222",weight="1"} 1
+```
 ## Scripted metrics
 
 Often you might want to record some values from your own business logic. As usual in the Kamailio ecosystem,

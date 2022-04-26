@@ -184,6 +184,12 @@ var (
 		"Opened TLS connections",
 		[]string{},
 		nil)
+
+	rtpengine_enabled = prometheus.NewDesc(
+		"kamailio_rtpengine_enabled",
+		"rtpengine connection status",
+		[]string{"url", "set", "index", "weight"},
+		nil)
 )
 
 type PkgStatsEntry struct {
@@ -352,6 +358,50 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 		}
 	}
 
+	// fetch rtpengine disabled status and url
+	cookie, err = binrpc.WritePacket(conn, "rtpengine.show", "all")
+	if err != nil {
+		log.Error("Can not request rtpengine.show: ", err)
+		return
+	}
+
+	records, err = binrpc.ReadPacket(conn, cookie)
+	if err != nil || len(records) == 0 {
+		log.Error("Can not fetch rtpengine.show: ", err)
+		return
+	}
+
+	for _, record := range records {
+		items, _ = record.StructItems()
+		var url string
+		var setInt, indexInt, weightInt int
+		var set, index, weight string
+		for _, item := range items {
+			log.Info("key:", item.Key)
+			switch item.Key {
+			case "disabled":
+				v, _ = item.Value.Int()
+			case "url":
+				url, _ = item.Value.String()
+			case "set":
+				setInt, _ = item.Value.Int()
+				set = strconv.Itoa(setInt)
+			case "index":
+				indexInt, _ = item.Value.Int()
+				index = strconv.Itoa(indexInt)
+			case "weight":
+				weightInt, _ = item.Value.Int()
+				weight = strconv.Itoa(weightInt)
+			}
+		}
+		//invert the disabled status to fit the metric name "rtpengine_enabled"
+		if v == 1 {
+			v = 0
+		} else {
+			v = 1
+		}
+		metricChannel <- prometheus.MustNewConstMetric(rtpengine_enabled, prometheus.GaugeValue, float64(v), url, set, index, weight)
+	}
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
