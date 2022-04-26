@@ -41,6 +41,13 @@ You can configure some things by using command line options or docker/systemd-fr
   * --socketPath=/some/path :  Path to Kamailio unix domain socket (default: "/var/run/kamailio/kamailio_ctl") (env variable: SOCKET_PATH)
   * --host=1.2.3.4 :     Kamailio ip or hostname. Domain socket is used if no host is defined. (env variable: HOST)
   * --port=3012 :          Kamailio port (default: 3012) (env variable: PORT)
+  * --rtpmetricsPath="" : Listen on this http scrape path to expose rtpengine metrics if the value is non empty
+                          (env variable: RTPMETRICS_PATH).
+                          However there is not yet an option available to set the adress and port of rtpengine, it's currently hardcoded to
+                          http://127.0.0.1:9901/metrics  
+                        
+                          
+
    
 #### Expose metrics via http
 

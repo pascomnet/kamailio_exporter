@@ -23,6 +23,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -80,6 +81,11 @@ func main() {
 			Value:  "/metrics",
 			Usage:  "The http scrape path",
 			EnvVar: "METRICS_PATH",
+		}, cli.StringFlag{
+			Name:   "rtpmetricsPath",
+			Value:  "",
+			Usage:  "The http scrape path for rtpengine metrics",
+			EnvVar: "RTPMETRICS_PATH",
 		},
 	}
 	app.Action = appAction
@@ -120,6 +126,31 @@ func appAction(c *cli.Context) error {
              </body>
              </html>`))
 	})
+	rtpmetricsPath := c.String("rtpmetricsPath")
+	if rtpmetricsPath != "" {
+		log.Info("Enabling rtp metrics @", rtpmetricsPath)
+		http.HandleFunc(rtpmetricsPath, func(w http.ResponseWriter, r *http.Request) {
+			resp, err := http.Get("http://127.0.0.1:9901/metrics")
+			if err != nil {
+				log.Error(err)
+				http.Error(w,
+					fmt.Sprintf("Failed to connect to rtpengine: %s", err.Error()),
+					http.StatusServiceUnavailable)
+				return
+			}
+			defer resp.Body.Close()
+			resp2, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Error(err)
+				http.Error(w,
+					fmt.Sprintf("Failed to read response from rtpengine: %s", err.Error()),
+					http.StatusInternalServerError)
+				return
+			}
+			w.Write(resp2)
+		})
+	}
+
 	// wire "/metrics" -> prometheus API collectors
 	http.HandleFunc(metricsPath, promhttp.Handler().ServeHTTP)
 
