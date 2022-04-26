@@ -185,10 +185,10 @@ var (
 		[]string{},
 		nil)
 
-	rtpengine_disabled = prometheus.NewDesc(
-		"kamailio_rtpengine_disabled",
+	rtpengine_enabled = prometheus.NewDesc(
+		"kamailio_rtpengine_enabled",
 		"rtpengine connection status",
-		[]string{"url"},
+		[]string{"url", "set", "index", "weight"},
 		nil)
 )
 
@@ -373,17 +373,34 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 
 	for _, record := range records {
 		items, _ = record.StructItems()
-		var s string
+		var url string
+		var setInt, indexInt, weightInt int
+		var set, index, weight string
 		for _, item := range items {
 			log.Info("key:", item.Key)
 			switch item.Key {
 			case "disabled":
 				v, _ = item.Value.Int()
 			case "url":
-				s, _ = item.Value.String()
+				url, _ = item.Value.String()
+			case "set":
+				setInt, _ = item.Value.Int()
+				set = strconv.Itoa(setInt)
+			case "index":
+				indexInt, _ = item.Value.Int()
+				index = strconv.Itoa(indexInt)
+			case "weight":
+				weightInt, _ = item.Value.Int()
+				weight = strconv.Itoa(weightInt)
 			}
 		}
-		metricChannel <- prometheus.MustNewConstMetric(rtpengine_disabled, prometheus.GaugeValue, float64(v), s)
+		//invert the disabled status to fit the metric name "rtpengine_enabled"
+		if v == 1 {
+			v = 0
+		} else {
+			v = 1
+		}
+		metricChannel <- prometheus.MustNewConstMetric(rtpengine_enabled, prometheus.GaugeValue, float64(v), url, set, index, weight)
 	}
 }
 
