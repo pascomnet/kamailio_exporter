@@ -377,7 +377,6 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 		var setInt, indexInt, weightInt int
 		var set, index, weight string
 		for _, item := range items {
-			log.Info("key:", item.Key)
 			switch item.Key {
 			case "disabled":
 				v, _ = item.Value.Int()
