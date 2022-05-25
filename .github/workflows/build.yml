@@ -1,0 +1,32 @@
+name: build
+
+on:
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+
+    runs-on: ubuntu-20.04
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.17
+
+    - name: Prepare 
+      run: make promu
+
+    - name: Build
+      run: promu crossbuild -v
+
+    - name: Archive production artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: binaries
+        path: .build/

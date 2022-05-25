@@ -1,8 +1,7 @@
 # Kamailio Exporter for Prometheus
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/pascomnet/kamailio_exporter/blob/master/LICENSE)
-[![CircleCI](https://circleci.com/gh/pascomnet/kamailio_exporter.svg?style=shield)](https://circleci.com/gh/pascomnet/kamailio_exporter)
-[![Go Report Card](https://goreportcard.com/badge/github.com/pascomnet/kamailio_exporter)](https://goreportcard.com/report/github.com/pascomnet/kamailio_exporter)
+![](https://github.com/hashicorp/nomad-driver-podman/workflows/build/badge.svg)
 
 A [Kamailio](https://www.kamailio.org/) exporter for Prometheus.
 It exports a range of core and often used module statistics as well as scripted metrics. 
@@ -42,6 +41,13 @@ You can configure some things by using command line options or docker/systemd-fr
   * --socketPath=/some/path :  Path to Kamailio unix domain socket (default: "/var/run/kamailio/kamailio_ctl") (env variable: SOCKET_PATH)
   * --host=1.2.3.4 :     Kamailio ip or hostname. Domain socket is used if no host is defined. (env variable: HOST)
   * --port=3012 :          Kamailio port (default: 3012) (env variable: PORT)
+  * --rtpmetricsPath="" : Listen on this http scrape path to expose rtpengine metrics if the value is non empty
+                          (env variable: RTPMETRICS_PATH).
+                          However there is not yet an option available to set the adress and port of rtpengine, it's currently hardcoded to
+                          http://127.0.0.1:9901/metrics  
+                        
+                          
+
    
 #### Expose metrics via http
 
@@ -189,8 +195,41 @@ kamailio_tmx_rpl_total{type="sent"} 0
 kamailio_tmx_type_total{type="uac"} 0
 kamailio_tmx_type_total{type="uas"} 0
 ```
+## Pkg / Private memory metrics
 
+A series of metrics is exported for each Kamailio child process:
 
+```
+# HELP kamilio_pkgmem_frags Private memory total frags
+kamilio_pkgmem_frags{entry="0"} 5
+# HELP kamilio_pkgmem_free Private memory free
+kamilio_pkgmem_free{entry="0"} 529136
+# HELP kamilio_pkgmem_real Private memory real used
+kamilio_pkgmem_real{entry="0"} 890336
+# HELP kamilio_pkgmem_size Private memory total size
+kamilio_pkgmem_size{entry="0"} 8.388608e+06
+# HELP kamilio_pkgmem_used Private memory used
+kamilio_pkgmem_used{entry="0"} 529136
+```
+## TCP/TLS details
+
+Some additional values from `core.tcp_info`:
+
+```
+# HELP kamailio_tcp_max_connections TCP connection limit
+kamailio_tcp_max_connections 16384
+# HELP kamailio_tcp_readers TCP readers
+kamailio_tcp_readers 8
+# HELP kamailio_tls_connections Opened TLS connections
+kamailio_tls_connections 0
+# HELP kamailio_tls_max_connections TLS connection limit
+kamailio_tls_max_connections 16384
+```
+## RTPEngine connection state
+```
+# HELP kamailio_rtpengine_enabled rtpengine connection status-
+kamailio_rtpengine_enabled{index="0",set="0",url="udp:127.0.0.1:22222",weight="1"} 1
+```
 ## Scripted metrics
 
 Often you might want to record some values from your own business logic. As usual in the Kamailio ecosystem,

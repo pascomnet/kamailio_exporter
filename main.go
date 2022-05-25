@@ -1,7 +1,29 @@
+// MIT License
+
+// Copyright (c) 2021 Thomas Weber, pascom GmbH & Co. Kg
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
@@ -59,6 +81,11 @@ func main() {
 			Value:  "/metrics",
 			Usage:  "The http scrape path",
 			EnvVar: "METRICS_PATH",
+		}, cli.StringFlag{
+			Name:   "rtpmetricsPath",
+			Value:  "",
+			Usage:  "The http scrape path for rtpengine metrics",
+			EnvVar: "RTPMETRICS_PATH",
 		},
 	}
 	app.Action = appAction
@@ -102,6 +129,31 @@ func appAction(c *cli.Context) error {
              </body>
              </html>`))
 	})
+	rtpmetricsPath := c.String("rtpmetricsPath")
+	if rtpmetricsPath != "" {
+		log.Info("Enabling rtp metrics @", rtpmetricsPath)
+		http.HandleFunc(rtpmetricsPath, func(w http.ResponseWriter, r *http.Request) {
+			resp, err := http.Get("http://127.0.0.1:9901/metrics")
+			if err != nil {
+				log.Error(err)
+				http.Error(w,
+					fmt.Sprintf("Failed to connect to rtpengine: %s", err.Error()),
+					http.StatusServiceUnavailable)
+				return
+			}
+			defer resp.Body.Close()
+			resp2, err := io.ReadAll(resp.Body)
+			if err != nil {
+				log.Error(err)
+				http.Error(w,
+					fmt.Sprintf("Failed to read response from rtpengine: %s", err.Error()),
+					http.StatusInternalServerError)
+				return
+			}
+			w.Write(resp2)
+		})
+	}
+
 	// wire "/metrics" -> prometheus API collectors
 	http.HandleFunc(metricsPath, promhttp.Handler().ServeHTTP)
 

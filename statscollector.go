@@ -1,3 +1,24 @@
+// MIT License
+
+// Copyright (c) 2021 Thomas Weber, pascom GmbH & Co. Kg
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 package main
 
 import (
@@ -13,6 +34,9 @@ import (
 )
 
 var conn net.Conn
+
+//MarkAsCollected - Insert Kamailio stat name in here once we're done scrapping its value
+var MarkAsCollected = make(map[string]string)
 
 // declare a series of prometheus metric descriptions
 // we can reuse them for each scrape
@@ -115,10 +139,76 @@ var (
 		"kamailio_usrloc",
 		"Userlocation Stats",
 		[]string{"type"}, nil)
+
+	pkgmem_used = prometheus.NewDesc(
+		"kamailio_pkgmem_used",
+		"Private memory used",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_free = prometheus.NewDesc(
+		"kamailio_pkgmem_free",
+		"Private memory free",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_real = prometheus.NewDesc(
+		"kamailio_pkgmem_real",
+		"Private memory real used",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_size = prometheus.NewDesc(
+		"kamailio_pkgmem_size",
+		"Private memory total size",
+		[]string{"entry"},
+		nil)
+
+	pkgmem_frags = prometheus.NewDesc(
+		"kamailio_pkgmem_frags",
+		"Private memory total frags",
+		[]string{"entry"},
+		nil)
+
+	tcp_readers = prometheus.NewDesc(
+		"kamailio_tcp_readers",
+		"TCP readers",
+		[]string{},
+		nil)
+
+	tcp_max_connections = prometheus.NewDesc(
+		"kamailio_tcp_max_connections",
+		"TCP connection limit",
+		[]string{},
+		nil)
+
+	tls_max_connections = prometheus.NewDesc(
+		"kamailio_tls_max_connections",
+		"TLS connection limit",
+		[]string{},
+		nil)
+
+	tls_connections = prometheus.NewDesc(
+		"kamailio_tls_connections",
+		"Opened TLS connections",
+		[]string{},
+		nil)
+
+	rtpengine_enabled = prometheus.NewDesc(
+		"kamailio_rtpengine_enabled",
+		"rtpengine connection status",
+		[]string{"url", "set", "index", "weight"},
+		nil)
 )
 
-//MarkAsCollected - Insert Kamailio stat name in here once we're done scrapping its value
-var MarkAsCollected = make(map[string]string)
+type PkgStatsEntry struct {
+	entry       int
+	used        int
+	free        int
+	real_used   int
+	total_size  int
+	total_frags int
+}
 
 // the actual Collector object
 type StatsCollector struct {
@@ -183,7 +273,7 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 	//defer timer.ObserveDuration()
 
 	// read all stats from Kamailio
-	if completeStatMap, err := c.fetchStats(); err == nil {
+	if completeStatMap, err := c.fetchStats(metricChannel); err == nil {
 		// and produce various prometheus.Metric for well-known stats
 		produceMetrics(completeStatMap, metricChannel)
 		// produce prometheus.Metric objects for scripted stats (if any)
@@ -199,7 +289,8 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 
 // connect to Kamailio and perform a "stats.fetch" rpc call
 // result is a flat key=>value map
-func (c *StatsCollector) fetchStats() (map[string]string, error) {
+func (c *StatsCollector) fetchStats(metricChannel chan<- prometheus.Metric) (map[string]string, error) {
+
 	// TODO measure rpc time
 	//timer := prometheus.NewTimer(rpc_request_duration)
 	//defer timer.ObserveDuration()
@@ -214,6 +305,7 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	// we receive records in response
 	versionResp, err := binrpc.ReadPacket(conn, versionCookie)
 	if err != nil {
+		log.Error("Can not connect to kamailio: ", err)
 		return nil, err
 	}
 	// convert the structure into a simple key=>value map
@@ -232,9 +324,14 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 		oldVersion = false
 	}
 
+	defer conn.Close()
+	// TODO
+	// c.conn.SetDeadline(time.Now().Add(c.Timeout))
+
 	// WritePacket returns the cookie generated
 	cookie, err := binrpc.WritePacket(conn, statsCommand, "all")
 	if err != nil {
+		log.Error("Can not request stats: ", err)
 		return nil, err
 	}
 
@@ -242,6 +339,7 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 	// we receive records in response
 	records, err := binrpc.ReadPacket(conn, cookie)
 	if err != nil {
+		log.Error("Can not fetch stats: ", err)
 		return nil, err
 	}
 
@@ -263,14 +361,135 @@ func (c *StatsCollector) fetchStats() (map[string]string, error) {
 			}
 		}
 	} else {
+
 		items, _ := records[0].StructItems()
+		completeStatMap := make(map[string]string)
 		for _, item := range items {
 			value, _ := item.Value.String()
-			result[item.Key] = value
+			completeStatMap[item.Key] = value
+		}
+		// and produce various prometheus.Metric for well-known stats
+		produceMetrics(completeStatMap, metricChannel)
+		// produce prometheus.Metric objects for scripted stats (if any)
+		convertScriptedMetrics(completeStatMap, metricChannel)
+
+		// now fetch pkg stats
+		cookie, err = binrpc.WritePacket(conn, "pkg.stats")
+		if err != nil {
+			log.Error("Can not request pkg.stats: ", err)
+			return nil, err
+		}
+
+		records, err = binrpc.ReadPacket(conn, cookie)
+		if err != nil {
+			log.Error("Can not fetch pkg.stats: ", err)
+			return nil, err
+		}
+
+		// convert each pkg entry to a series of metrics
+		for _, record := range records {
+			items, _ = record.StructItems()
+			entry := PkgStatsEntry{}
+			for _, item := range items {
+				switch item.Key {
+				case "entry":
+					entry.entry, _ = item.Value.Int()
+				case "used":
+					entry.used, _ = item.Value.Int()
+				case "free":
+					entry.free, _ = item.Value.Int()
+				case "real_used":
+					entry.real_used, _ = item.Value.Int()
+				case "total_size":
+					entry.total_size, _ = item.Value.Int()
+				case "total_frags":
+					entry.total_frags, _ = item.Value.Int()
+				}
+			}
+			sentry := strconv.Itoa(entry.entry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_used, prometheus.GaugeValue, float64(entry.used), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_free, prometheus.GaugeValue, float64(entry.free), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_real, prometheus.GaugeValue, float64(entry.real_used), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_size, prometheus.GaugeValue, float64(entry.total_size), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_frags, prometheus.GaugeValue, float64(entry.total_frags), sentry)
+		}
+
+		// fetch tcp details
+		cookie, err = binrpc.WritePacket(conn, "core.tcp_info")
+		if err != nil {
+			log.Error("Can not request core.tcp_info: ", err)
+			return nil, err
+		}
+
+		records, err = binrpc.ReadPacket(conn, cookie)
+		if err != nil || len(records) == 0 {
+			log.Error("Can not fetch core.tcp_info: ", err)
+			return nil, err
+		}
+		items, _ = records[0].StructItems()
+		var v int
+		for _, item := range items {
+			switch item.Key {
+			case "readers":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tcp_readers, prometheus.GaugeValue, float64(v))
+			case "max_connections":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tcp_max_connections, prometheus.GaugeValue, float64(v))
+			case "max_tls_connections":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tls_max_connections, prometheus.GaugeValue, float64(v))
+			case "opened_tls_connections":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tls_connections, prometheus.GaugeValue, float64(v))
+			}
+		}
+
+		// fetch rtpengine disabled status and url
+		cookie, err = binrpc.WritePacket(conn, "rtpengine.show", "all")
+		if err != nil {
+			log.Error("Can not request rtpengine.show: ", err)
+			return nil, err
+		}
+
+		records, err = binrpc.ReadPacket(conn, cookie)
+		if err != nil || len(records) == 0 {
+			log.Error("Can not fetch rtpengine.show: ", err)
+			return nil, err
+		}
+
+		for _, record := range records {
+			items, _ = record.StructItems()
+			var url string
+			var setInt, indexInt, weightInt int
+			var set, index, weight string
+			for _, item := range items {
+				switch item.Key {
+				case "disabled":
+					v, _ = item.Value.Int()
+				case "url":
+					url, _ = item.Value.String()
+				case "set":
+					setInt, _ = item.Value.Int()
+					set = strconv.Itoa(setInt)
+				case "index":
+					indexInt, _ = item.Value.Int()
+					index = strconv.Itoa(indexInt)
+				case "weight":
+					weightInt, _ = item.Value.Int()
+					weight = strconv.Itoa(weightInt)
+				}
+			}
+			//invert the disabled status to fit the metric name "rtpengine_enabled"
+			if v == 1 {
+				v = 0
+			} else {
+				v = 1
+			}
+			metricChannel <- prometheus.MustNewConstMetric(rtpengine_enabled, prometheus.GaugeValue, float64(v), url, set, index, weight)
 		}
 	}
-
-	return result, nil
+	return nil, nil
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
