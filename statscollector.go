@@ -373,6 +373,10 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 
 	for _, record := range records {
 		items, _ = record.StructItems()
+		if len(items) == 0 {
+			log.Debug("Rtpengine.show all has empty item in records - probably because rtpengine is disabled")
+			continue
+		}
 		var url string
 		var setInt, indexInt, weightInt int
 		var set, index, weight string
@@ -392,6 +396,10 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 				weightInt, _ = item.Value.Int()
 				weight = strconv.Itoa(weightInt)
 			}
+		}
+		if url == "" {
+			log.Error("No valid url found for rtpengine, failed to construct metric rtpengine_enabled")
+			continue
 		}
 		//invert the disabled status to fit the metric name "rtpengine_enabled"
 		if v == 1 {
