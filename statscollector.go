@@ -374,7 +374,7 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 	for _, record := range records {
 		items, _ = record.StructItems()
 		if len(items) == 0 {
-			log.Debug("Rtpengine.show all has empty item in records - probably because rtpengine is disabled")
+			log.Debug("Rtpengine.show all has empty items in record - probably because rtpengine is disabled")
 			continue
 		}
 		var url string
