@@ -110,6 +110,9 @@ func appAction(c *cli.Context) error {
 	if err != nil {
 		return err
 	}
+	//Connect with the Kamailio server  now
+	collector.ConnectKamailio()
+	defer conn.Close()
 	// and register it in prometheus API
 	prometheus.MustRegister(collector)
 

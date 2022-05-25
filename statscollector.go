@@ -33,6 +33,11 @@ import (
 	"gopkg.in/urfave/cli.v1"
 )
 
+var conn net.Conn
+
+//MarkAsCollected - Insert Kamailio stat name in here once we're done scrapping its value
+var MarkAsCollected = make(map[string]string)
+
 // declare a series of prometheus metric descriptions
 // we can reuse them for each scrape
 var (
@@ -129,6 +134,10 @@ var (
 	dialog = prometheus.NewDesc(
 		"kamailio_dialog",
 		"Ongoing Dialogs",
+		[]string{"type"}, nil)
+	usrloc = prometheus.NewDesc(
+		"kamailio_usrloc",
+		"Userlocation Stats",
 		[]string{"type"}, nil)
 
 	pkgmem_used = prometheus.NewDesc(
@@ -232,27 +241,87 @@ func (c *StatsCollector) Describe(descriptionChannel chan<- *prometheus.Desc) {
 	prometheus.DescribeByCollect(c, descriptionChannel)
 }
 
+func (c *StatsCollector) ConnectKamailio() {
+	// establish connection to Kamailio server
+	var err error
+	var readInterface string
+
+	if c.kamailioHost == "" {
+
+		readInterface = c.socketPath
+		conn, err = net.Dial("unix", c.socketPath)
+
+	} else {
+		// TODO
+		// c.conn.SetDeadline(time.Now().Add(c.Timeout))
+		address := fmt.Sprintf("%s:%d", c.kamailioHost, c.kamailioPort)
+		readInterface = address
+
+		conn, err = net.Dial("tcp", address)
+
+	}
+	if err != nil {
+		log.Printf("Unable to connect with the Provided Interface:%s\n", readInterface)
+	}
+
+}
+
 // part of the prometheus.Collector interface
 func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
-
 	// TODO measure rpc time
 	//timer := prometheus.NewTimer(rpc_request_duration)
 	//defer timer.ObserveDuration()
 
-	// establish connection to Kamailio server
-	var err error
-	var conn net.Conn
-	if c.kamailioHost == "" {
-		log.Debug("Requesting stats from kamailio via domain socket ", c.socketPath)
-		conn, err = net.Dial("unix", c.socketPath)
+	// read all stats from Kamailio
+	if completeStatMap, err := c.fetchStats(metricChannel); err == nil {
+		// and produce various prometheus.Metric for well-known stats
+		produceMetrics(completeStatMap, metricChannel)
+		// produce prometheus.Metric objects for scripted stats (if any)
+		convertScriptedMetrics(completeStatMap, metricChannel)
+		// produce prometheus.Metric objects for anything thats still left behind by above - best effort mode
+		convertOtherMetrics(completeStatMap, metricChannel)
 	} else {
-		address := fmt.Sprintf("%s:%d", c.kamailioHost, c.kamailioPort)
-		log.Debug("Requesting stats from kamailio via binrpc ", address)
-		conn, err = net.Dial("tcp", address)
+		// something went wrong
+		// TODO: add a error metric
+		log.Error("Could not fetch values from kamailio", err)
 	}
+}
+
+// connect to Kamailio and perform a "stats.fetch" rpc call
+// result is a flat key=>value map
+func (c *StatsCollector) fetchStats(metricChannel chan<- prometheus.Metric) (map[string]string, error) {
+
+	// TODO measure rpc time
+	//timer := prometheus.NewTimer(rpc_request_duration)
+	//defer timer.ObserveDuration()
+	//Find out the version of Kamailio running
+	// WritePacket returns the cookie generated
+
+	versionCookie, err := binrpc.WritePacket(conn, "core.version")
+	if err != nil {
+		return nil, err
+	}
+	// the versionCookie is passed again for verification
+	// we receive records in response
+	versionResp, err := binrpc.ReadPacket(conn, versionCookie)
 	if err != nil {
 		log.Error("Can not connect to kamailio: ", err)
-		return
+		return nil, err
+	}
+	// convert the structure into a simple key=>value map
+	var valueAsString string
+	var ok, oldVersion bool
+	if valueAsString, ok = versionResp[0].Value.(string); ok {
+		log.Debugf("[Kamailio CTL Version:%#v", valueAsString)
+	}
+	var statsCommand string
+	if strings.Contains(valueAsString, "5.0") {
+		//Older version of Kamailio detected
+		statsCommand = "stats.get_statistics"
+		oldVersion = true
+	} else {
+		statsCommand = "stats.fetch"
+		oldVersion = false
 	}
 
 	defer conn.Close()
@@ -260,10 +329,10 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 	// c.conn.SetDeadline(time.Now().Add(c.Timeout))
 
 	// WritePacket returns the cookie generated
-	cookie, err := binrpc.WritePacket(conn, "stats.fetch", "all")
+	cookie, err := binrpc.WritePacket(conn, statsCommand, "all")
 	if err != nil {
 		log.Error("Can not request stats: ", err)
-		return
+		return nil, err
 	}
 
 	// the cookie is passed again for verification
@@ -271,136 +340,156 @@ func (c *StatsCollector) Collect(metricChannel chan<- prometheus.Metric) {
 	records, err := binrpc.ReadPacket(conn, cookie)
 	if err != nil {
 		log.Error("Can not fetch stats: ", err)
-		return
+		return nil, err
 	}
 
 	// convert the structure into a simple key=>value map
-	items, _ := records[0].StructItems()
-	completeStatMap := make(map[string]string)
-	for _, item := range items {
-		value, _ := item.Value.String()
-		completeStatMap[item.Key] = value
-	}
-	// and produce various prometheus.Metric for well-known stats
-	produceMetrics(completeStatMap, metricChannel)
-	// produce prometheus.Metric objects for scripted stats (if any)
-	convertScriptedMetrics(completeStatMap, metricChannel)
+	result := make(map[string]string)
 
-	// now fetch pkg stats
-	cookie, err = binrpc.WritePacket(conn, "pkg.stats")
-	if err != nil {
-		log.Error("Can not request pkg.stats: ", err)
-		return
-	}
-
-	records, err = binrpc.ReadPacket(conn, cookie)
-	if err != nil {
-		log.Error("Can not fetch pkg.stats: ", err)
-		return
-	}
-
-	// convert each pkg entry to a series of metrics
-	for _, record := range records {
-		items, _ = record.StructItems()
-		entry := PkgStatsEntry{}
-		for _, item := range items {
-			switch item.Key {
-			case "entry":
-				entry.entry, _ = item.Value.Int()
-			case "used":
-				entry.used, _ = item.Value.Int()
-			case "free":
-				entry.free, _ = item.Value.Int()
-			case "real_used":
-				entry.real_used, _ = item.Value.Int()
-			case "total_size":
-				entry.total_size, _ = item.Value.Int()
-			case "total_frags":
-				entry.total_frags, _ = item.Value.Int()
+	if oldVersion {
+		for _, item := range records {
+			if valueAsString, ok = item.Value.(string); ok {
+				//split into Key and Value
+				Pair := strings.Split(valueAsString, "=")
+				//convert key's : into a .
+				key := strings.ReplaceAll(Pair[0], ":", ".")
+				//remove spaces
+				key = strings.TrimSpace(key)
+				value := strings.TrimSpace(Pair[1])
+				//Push into Map as expected by other functions
+				result[key] = value
 			}
 		}
-		sentry := strconv.Itoa(entry.entry)
-		metricChannel <- prometheus.MustNewConstMetric(pkgmem_used, prometheus.GaugeValue, float64(entry.used), sentry)
-		metricChannel <- prometheus.MustNewConstMetric(pkgmem_free, prometheus.GaugeValue, float64(entry.free), sentry)
-		metricChannel <- prometheus.MustNewConstMetric(pkgmem_real, prometheus.GaugeValue, float64(entry.real_used), sentry)
-		metricChannel <- prometheus.MustNewConstMetric(pkgmem_size, prometheus.GaugeValue, float64(entry.total_size), sentry)
-		metricChannel <- prometheus.MustNewConstMetric(pkgmem_frags, prometheus.GaugeValue, float64(entry.total_frags), sentry)
-	}
+	} else {
 
-	// fetch tcp details
-	cookie, err = binrpc.WritePacket(conn, "core.tcp_info")
-	if err != nil {
-		log.Error("Can not request core.tcp_info: ", err)
-		return
-	}
-
-	records, err = binrpc.ReadPacket(conn, cookie)
-	if err != nil || len(records) == 0 {
-		log.Error("Can not fetch core.tcp_info: ", err)
-		return
-	}
-	items, _ = records[0].StructItems()
-	var v int
-	for _, item := range items {
-		switch item.Key {
-		case "readers":
-			v, _ = item.Value.Int()
-			metricChannel <- prometheus.MustNewConstMetric(tcp_readers, prometheus.GaugeValue, float64(v))
-		case "max_connections":
-			v, _ = item.Value.Int()
-			metricChannel <- prometheus.MustNewConstMetric(tcp_max_connections, prometheus.GaugeValue, float64(v))
-		case "max_tls_connections":
-			v, _ = item.Value.Int()
-			metricChannel <- prometheus.MustNewConstMetric(tls_max_connections, prometheus.GaugeValue, float64(v))
-		case "opened_tls_connections":
-			v, _ = item.Value.Int()
-			metricChannel <- prometheus.MustNewConstMetric(tls_connections, prometheus.GaugeValue, float64(v))
+		items, _ := records[0].StructItems()
+		completeStatMap := make(map[string]string)
+		for _, item := range items {
+			value, _ := item.Value.String()
+			completeStatMap[item.Key] = value
 		}
-	}
+		// and produce various prometheus.Metric for well-known stats
+		produceMetrics(completeStatMap, metricChannel)
+		// produce prometheus.Metric objects for scripted stats (if any)
+		convertScriptedMetrics(completeStatMap, metricChannel)
 
-	// fetch rtpengine disabled status and url
-	cookie, err = binrpc.WritePacket(conn, "rtpengine.show", "all")
-	if err != nil {
-		log.Error("Can not request rtpengine.show: ", err)
-		return
-	}
+		// now fetch pkg stats
+		cookie, err = binrpc.WritePacket(conn, "pkg.stats")
+		if err != nil {
+			log.Error("Can not request pkg.stats: ", err)
+			return nil, err
+		}
 
-	records, err = binrpc.ReadPacket(conn, cookie)
-	if err != nil || len(records) == 0 {
-		log.Error("Can not fetch rtpengine.show: ", err)
-		return
-	}
+		records, err = binrpc.ReadPacket(conn, cookie)
+		if err != nil {
+			log.Error("Can not fetch pkg.stats: ", err)
+			return nil, err
+		}
 
-	for _, record := range records {
-		items, _ = record.StructItems()
-		var url string
-		var setInt, indexInt, weightInt int
-		var set, index, weight string
+		// convert each pkg entry to a series of metrics
+		for _, record := range records {
+			items, _ = record.StructItems()
+			entry := PkgStatsEntry{}
+			for _, item := range items {
+				switch item.Key {
+				case "entry":
+					entry.entry, _ = item.Value.Int()
+				case "used":
+					entry.used, _ = item.Value.Int()
+				case "free":
+					entry.free, _ = item.Value.Int()
+				case "real_used":
+					entry.real_used, _ = item.Value.Int()
+				case "total_size":
+					entry.total_size, _ = item.Value.Int()
+				case "total_frags":
+					entry.total_frags, _ = item.Value.Int()
+				}
+			}
+			sentry := strconv.Itoa(entry.entry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_used, prometheus.GaugeValue, float64(entry.used), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_free, prometheus.GaugeValue, float64(entry.free), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_real, prometheus.GaugeValue, float64(entry.real_used), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_size, prometheus.GaugeValue, float64(entry.total_size), sentry)
+			metricChannel <- prometheus.MustNewConstMetric(pkgmem_frags, prometheus.GaugeValue, float64(entry.total_frags), sentry)
+		}
+
+		// fetch tcp details
+		cookie, err = binrpc.WritePacket(conn, "core.tcp_info")
+		if err != nil {
+			log.Error("Can not request core.tcp_info: ", err)
+			return nil, err
+		}
+
+		records, err = binrpc.ReadPacket(conn, cookie)
+		if err != nil || len(records) == 0 {
+			log.Error("Can not fetch core.tcp_info: ", err)
+			return nil, err
+		}
+		items, _ = records[0].StructItems()
+		var v int
 		for _, item := range items {
 			switch item.Key {
-			case "disabled":
+			case "readers":
 				v, _ = item.Value.Int()
-			case "url":
-				url, _ = item.Value.String()
-			case "set":
-				setInt, _ = item.Value.Int()
-				set = strconv.Itoa(setInt)
-			case "index":
-				indexInt, _ = item.Value.Int()
-				index = strconv.Itoa(indexInt)
-			case "weight":
-				weightInt, _ = item.Value.Int()
-				weight = strconv.Itoa(weightInt)
+				metricChannel <- prometheus.MustNewConstMetric(tcp_readers, prometheus.GaugeValue, float64(v))
+			case "max_connections":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tcp_max_connections, prometheus.GaugeValue, float64(v))
+			case "max_tls_connections":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tls_max_connections, prometheus.GaugeValue, float64(v))
+			case "opened_tls_connections":
+				v, _ = item.Value.Int()
+				metricChannel <- prometheus.MustNewConstMetric(tls_connections, prometheus.GaugeValue, float64(v))
 			}
 		}
-		//invert the disabled status to fit the metric name "rtpengine_enabled"
-		if v == 1 {
-			v = 0
-		} else {
-			v = 1
+
+		// fetch rtpengine disabled status and url
+		cookie, err = binrpc.WritePacket(conn, "rtpengine.show", "all")
+		if err != nil {
+			log.Error("Can not request rtpengine.show: ", err)
+			return nil, err
 		}
-		metricChannel <- prometheus.MustNewConstMetric(rtpengine_enabled, prometheus.GaugeValue, float64(v), url, set, index, weight)
+
+		records, err = binrpc.ReadPacket(conn, cookie)
+		if err != nil || len(records) == 0 {
+			log.Error("Can not fetch rtpengine.show: ", err)
+			return nil, err
+		}
+
+		for _, record := range records {
+			items, _ = record.StructItems()
+			var url string
+			var setInt, indexInt, weightInt int
+			var set, index, weight string
+			for _, item := range items {
+				switch item.Key {
+				case "disabled":
+					v, _ = item.Value.Int()
+				case "url":
+					url, _ = item.Value.String()
+				case "set":
+					setInt, _ = item.Value.Int()
+					set = strconv.Itoa(setInt)
+				case "index":
+					indexInt, _ = item.Value.Int()
+					index = strconv.Itoa(indexInt)
+				case "weight":
+					weightInt, _ = item.Value.Int()
+					weight = strconv.Itoa(weightInt)
+				}
+			}
+			//invert the disabled status to fit the metric name "rtpengine_enabled"
+			if v == 1 {
+				v = 0
+			} else {
+				v = 1
+			}
+			metricChannel <- prometheus.MustNewConstMetric(rtpengine_enabled, prometheus.GaugeValue, float64(v), url, set, index, weight)
+		}
 	}
+	return nil, nil
 }
 
 // produce a series of prometheus.Metric values by converting "well-known" prometheus stats
@@ -531,6 +620,17 @@ func produceMetrics(completeStatMap map[string]string, metricChannel chan<- prom
 	convertStatToMetric(completeStatMap, "dialog.expired_dialogs", "expired_dialogs", dialog, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "dialog.failed_dialogs", "failed_dialogs", dialog, metricChannel, prometheus.CounterValue)
 	convertStatToMetric(completeStatMap, "dialog.processed_dialogs", "processed_dialogs", dialog, metricChannel, prometheus.CounterValue)
+
+	//kamailio_usrloc
+	convertStatToMetric(completeStatMap, "usrloc.location_contacts", "location_contact", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location_expires", "location_expires", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.location_users", "location_users", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "usrloc.registered_users", "registered_users", usrloc, metricChannel, prometheus.CounterValue)
+
+	//kamailio_registrar
+	convertStatToMetric(completeStatMap, "registrar.accepted_regs", "accepted_regs", usrloc, metricChannel, prometheus.CounterValue)
+	convertStatToMetric(completeStatMap, "registrar.rejected_regs", "rejected_regs", usrloc, metricChannel, prometheus.CounterValue)
+
 }
 
 // Iterate all reported "stats" keys and find those with a prefix of "script."
@@ -540,6 +640,7 @@ func convertScriptedMetrics(data map[string]string, prom chan<- prometheus.Metri
 	for k := range data {
 		// k = "script.custom_total"
 		if strings.HasPrefix(k, "script.") {
+			MarkAsCollected[k] = "marked"
 			// metricName = "custom_total"
 			metricName := strings.TrimPrefix(k, "script.")
 			metricName = strings.ToLower(metricName)
@@ -558,6 +659,49 @@ func convertScriptedMetrics(data map[string]string, prom chan<- prometheus.Metri
 	}
 }
 
+// Iterate all reported "stats" keys and find those with a prefix of "script."
+// These values are user-defined and populated within the kamailio script.
+// See https://www.kamailio.org/docs/modules/5.2.x/modules/statistics.html
+func convertOtherMetrics(data map[string]string, prom chan<- prometheus.Metric) {
+
+	for k := range data {
+		if _, ok := MarkAsCollected[k]; !ok {
+			//this is a new stat, nothing we've collected so far.
+
+			var description *prometheus.Desc
+			splitMetricName := strings.Split(k, ".")
+
+			metricName := "kamailio_" + strings.ToLower(splitMetricName[0])
+
+			var valueType prometheus.ValueType
+			// default type of value is to be Counter
+			valueType = prometheus.GaugeValue
+
+			// create a metric description on the fly
+			var label string
+			var subSections []string
+			cutCount := strings.Count(splitMetricName[1], "_")
+			subSections = strings.SplitN(splitMetricName[1], "_", cutCount)
+			if cutCount > 1 {
+				subSections = strings.SplitN(splitMetricName[1], "_", cutCount)
+				metricName = metricName + "_" + strings.Join(subSections[:len(subSections)-1], "_")
+				label = subSections[len(subSections)-1]
+			} else {
+				subSections = strings.SplitN(splitMetricName[1], "_", cutCount+1)
+				metricName = metricName + "_" + subSections[0]
+				label = subSections[1]
+			}
+			description = prometheus.NewDesc(metricName, "Other metric "+metricName, []string{"type"}, nil)
+			// and produce a metricA
+			convertStatToMetric(data, k, label, description, prom, valueType)
+		}
+	}
+	//Flush out marked stats so we can collect at next collection
+	for k := range MarkAsCollected {
+		delete(MarkAsCollected, k)
+	}
+}
+
 // convert a single "stat" value to a prometheus metric
 // invalid "stat" paires are skipped but logged
 func convertStatToMetric(completeStatMap map[string]string, statKey string, optionalLabelValue string, metricDescription *prometheus.Desc, metricChannel chan<- prometheus.Metric, valueType prometheus.ValueType) {
@@ -569,8 +713,15 @@ func convertStatToMetric(completeStatMap map[string]string, statKey string, opti
 		labelValues = []string{}
 	}
 	// get the stat-value ...
+
 	if valueAsString, ok := completeStatMap[statKey]; ok {
 		// ... convert it to a float
+		if optionalLabelValue != "" {
+			MarkAsCollected[statKey] = optionalLabelValue
+		} else {
+			MarkAsCollected[statKey] = "marked"
+		}
+
 		if value, err := strconv.ParseFloat(valueAsString, 64); err == nil {
 			// and produce a prometheus metric
 			metric, err := prometheus.NewConstMetric(
@@ -584,7 +735,7 @@ func convertStatToMetric(completeStatMap map[string]string, statKey string, opti
 				metricChannel <- metric
 			} else {
 				// or skip and complain
-				log.Warnf("Could not convert stat value [%s]: %s", statKey, err)
+				log.Warnf("Could not convert stat Key [%s] Value:%s Err: %s", statKey, valueAsString, err)
 			}
 		}
 	} else {
