@@ -87,10 +87,10 @@ func main() {
 			Usage:  "The http scrape path for rtpengine metrics",
 			EnvVar: "RTPMETRICS_PATH",
 		}, cli.StringFlag{
-			Name:   "nativeKamailioMetricsURL",
+			Name:   "customKamailioMetricsURL",
 			Value:  "",
 			Usage:  "URL to request user defined metrics from kamailio",
-			EnvVar: "NATIVE_KAMAILIO_METRICS_URL",
+			EnvVar: "CUSTOM_KAMAILIO_METRICS_URL",
 		},
 	}
 	app.Action = appAction
@@ -159,8 +159,8 @@ func appAction(c *cli.Context) error {
 	// wire "/metrics" -> prometheus API collectors
 	http.HandleFunc(metricsPath, func(w http.ResponseWriter, r *http.Request) {
 		//get user defined kamailio metrics and prepend to http response
-		if c.String("nativeKamailioMetricsURL") != "" {
-			resp, err := http.Get(c.String("nativeKamailioMetricsURL"))
+		if c.String("customKamailioMetricsURL") != "" {
+			resp, err := http.Get(c.String("customKamailioMetricsURL"))
 			if err != nil {
 				log.Error("Failed to query kamailio user defined metrics", err)
 			} else if resp.StatusCode != http.StatusOK {
