@@ -86,6 +86,11 @@ func main() {
 			Value:  "",
 			Usage:  "The http scrape path for rtpengine metrics",
 			EnvVar: "RTPMETRICS_PATH",
+		}, cli.StringFlag{
+			Name:   "customKamailioMetricsURL",
+			Value:  "",
+			Usage:  "URL to request user defined metrics from kamailio",
+			EnvVar: "CUSTOM_KAMAILIO_METRICS_URL",
 		},
 	}
 	app.Action = appAction
@@ -152,7 +157,27 @@ func appAction(c *cli.Context) error {
 	}
 
 	// wire "/metrics" -> prometheus API collectors
-	http.HandleFunc(metricsPath, promhttp.Handler().ServeHTTP)
+	http.HandleFunc(metricsPath, func(w http.ResponseWriter, r *http.Request) {
+		//get user defined kamailio metrics and prepend to http response
+		if c.String("customKamailioMetricsURL") != "" {
+			resp, err := http.Get(c.String("customKamailioMetricsURL"))
+			if err != nil {
+				log.Error("Failed to query kamailio user defined metrics", err)
+			} else if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				log.Errorf("Requesting user defined kamailio metrics returned status code: %v", resp.StatusCode)
+			} else {
+				defer resp.Body.Close()
+				resp2, err := io.ReadAll(resp.Body)
+				if err != nil {
+					log.Error("Failed to read kamailio user defined metrics", err)
+				} else {
+					w.Write(resp2)
+				}
+			}
+		}
+		promhttp.Handler().ServeHTTP(w, r)
+	})
 
 	// start http server
 	log.Info("Listening on ", listenAddress, metricsPath)
