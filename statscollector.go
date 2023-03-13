@@ -27,7 +27,7 @@ import (
 	"strconv"
 	"strings"
 
-	binrpc "github.com/florentchauveau/go-kamailio-binrpc/v2"
+	binrpc "github.com/florentchauveau/go-kamailio-binrpc/v3"
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
