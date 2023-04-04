@@ -22,6 +22,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,6 +30,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/urfave/cli.v1"
 )
@@ -81,12 +84,14 @@ func main() {
 			Value:  "/metrics",
 			Usage:  "The http scrape path",
 			EnvVar: "METRICS_PATH",
-		}, cli.StringFlag{
+		},
+		cli.StringFlag{
 			Name:   "rtpmetricsPath",
 			Value:  "",
 			Usage:  "The http scrape path for rtpengine metrics",
 			EnvVar: "RTPMETRICS_PATH",
-		}, cli.StringFlag{
+		},
+		cli.StringFlag{
 			Name:   "customKamailioMetricsURL",
 			Value:  "",
 			Usage:  "URL to request user defined metrics from kamailio",
@@ -156,30 +161,66 @@ func appAction(c *cli.Context) error {
 		})
 	}
 
-	// wire "/metrics" -> prometheus API collectors
-	http.HandleFunc(metricsPath, func(w http.ResponseWriter, r *http.Request) {
-		//get user defined kamailio metrics and prepend to http response
-		if c.String("customKamailioMetricsURL") != "" {
-			resp, err := http.Get(c.String("customKamailioMetricsURL"))
-			if err != nil {
-				log.Error("Failed to query kamailio user defined metrics", err)
-			} else if resp.StatusCode != http.StatusOK {
-				resp.Body.Close()
-				log.Errorf("Requesting user defined kamailio metrics returned status code: %v", resp.StatusCode)
-			} else {
-				defer resp.Body.Close()
-				resp2, err := io.ReadAll(resp.Body)
-				if err != nil {
-					log.Error("Failed to read kamailio user defined metrics", err)
-				} else {
-					w.Write(resp2)
-				}
-			}
-		}
-		promhttp.Handler().ServeHTTP(w, r)
-	})
+	if customMetricsURL := c.String("customKamailioMetricsURL"); customMetricsURL != "" {
+		http.Handle(metricsPath, handlerWithUserDefinedMetrics(customMetricsURL))
+	} else {
+		http.Handle(metricsPath, promhttp.Handler())
+	}
 
 	// start http server
 	log.Info("Listening on ", listenAddress, metricsPath)
 	return http.ListenAndServe(listenAddress, nil)
+}
+
+// Request user defined metrics and parse them into proper data objects
+func gatherUserDefinedMetrics(url string) ([]*dto.MetricFamily, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Error("Failed to query kamailio user defined metrics", err)
+		return nil, err
+	} else if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		log.Errorf("Requesting user defined kamailio metrics returned status code: %v", resp.StatusCode)
+		return nil, err
+	}
+
+	defer resp.Body.Close()
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Error("Failed to read kamailio user defined metrics", err)
+		return nil, err
+	}
+
+	parser := expfmt.TextParser{}
+	parsed, err := parser.TextToMetricFamilies(bytes.NewReader(respBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	result := []*dto.MetricFamily{}
+	for _, mf := range parsed {
+		result = append(result, mf)
+	}
+
+	return result, nil
+}
+
+func handlerWithUserDefinedMetrics(userDefinedMetricsURL string) http.Handler {
+	gatherer := func() ([]*dto.MetricFamily, error) {
+		ours, err := prometheus.DefaultGatherer.Gather()
+		if err != nil {
+			return ours, err
+		}
+		theirs, err := gatherUserDefinedMetrics(userDefinedMetricsURL)
+		if err != nil {
+			log.Error("Scraping user defined metrics failed", err)
+			return ours, nil
+		}
+		return append(ours, theirs...), nil
+	}
+
+	// defaults like promhttp.Handler(), except using our own gatherer
+	return promhttp.InstrumentMetricHandler(
+		prometheus.DefaultRegisterer,
+		promhttp.HandlerFor(prometheus.GathererFunc(gatherer), promhttp.HandlerOpts{}))
 }
